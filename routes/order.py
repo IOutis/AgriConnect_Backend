@@ -354,7 +354,16 @@ def accept_negotiation():
         return jsonify({"error": "Missing required fields"}), 400
 
     # Get negotiation details
-    negotiation = supabase.table("negotiations").select("*").eq("id", negotiation_id).single().execute().data
+    negotiation_res = (
+        supabase
+        .table("negotiations")
+        .select("*")
+        .eq("id", negotiation_id)
+        .single()
+        .execute()
+    )
+
+    negotiation = negotiation_res.data
     if not negotiation:
         return jsonify({"error": "Negotiation not found"}), 404
 
@@ -370,12 +379,20 @@ def accept_negotiation():
         "negotiated_price": negotiation["suggested_price"],
         "status": "confirmed"
     }
-    order_insert = supabase.table("orders").insert(order).select("*").single().execute()
+
+    # ✅ Correct way to return the inserted row
+    order_insert = (
+        supabase
+        .table("orders")
+        .insert(order, returning="representation")
+        .execute()
+    )
 
     return jsonify({
         "message": "Negotiation accepted and order placed",
-        "order": order_insert.data
+        "order": order_insert.data[0] if order_insert.data else {}
     }), 201
+
 # @order_bp.route('/negotiation/reject', methods=['POST'])
 # def reject_negotiation():
 #     data = request.json
