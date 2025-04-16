@@ -319,8 +319,9 @@ def send_negotiation_message():
     receiver_id = data.get("receiver_id")
     suggested_price = data.get("suggested_price")
     justification = data.get("justification")
+    quantity = data.get("quantity")
 
-    if not all([product_id, sender_id, receiver_id, suggested_price, justification]):
+    if not all([product_id, sender_id, receiver_id, suggested_price, justification, quantity]):
         return jsonify({"error": "All fields are required"}), 400
 
     # Insert and get response
@@ -330,7 +331,8 @@ def send_negotiation_message():
         "receiver_id": receiver_id,
         "suggested_price": suggested_price,
         "justification": justification,
-        "status": "pending"
+        "status": "pending",
+        "quantity":quantity
     }).execute()
 
     # if insert_response.error:
