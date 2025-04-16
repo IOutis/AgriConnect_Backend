@@ -28,13 +28,13 @@ def generate_jwt(user_id, role):
     }
     return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
-def upload_image_to_supabase(base64_image):
-    image_data = base64.b64decode(base64_image)
-    image_name = f"product-images/{uuid.uuid4()}.jpg"
-    res = supabase.storage.from_("product-images").upload(image_name, image_data)
-    if res.error:
-        raise Exception(res.error.message)
-    return f"{SUPABASE_URL}/storage/v1/object/public/{image_name}"
+# def upload_image_to_supabase(base64_image):
+#     image_data = base64.b64decode(base64_image)
+#     image_name = f"product-images/{uuid.uuid4()}.jpg"
+#     res = supabase.storage.from_("product-images").upload(image_name, image_data)
+#     if res.error:
+#         raise Exception(res.error.message)
+#     return f"{SUPABASE_URL}/storage/v1/object/public/{image_name}"
 
 def fetch_fair_price(
     commodity, 

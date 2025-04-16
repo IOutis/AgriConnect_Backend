@@ -1,19 +1,27 @@
+from datetime import datetime
 from flask import Blueprint, request, jsonify
-from utils.helpers import supabase, upload_image_to_supabase, fetch_fair_price
-
+from utils.helpers import supabase, fetch_fair_price
+import requests
+import traceback
 product_bp = Blueprint('product', __name__)
 
 # Upload product with price validation
 @product_bp.route('/upload', methods=['POST'])
 def upload_product():
     data = request.json
-    required_fields = ["farmer_id", "product_name", "commodity", "price", "quantity", ] #"image"
+    required_fields = ["farmer_id", "product_name", "commodity", "price", "quantity","image" ] #"image"
+    print(data)
     for field in required_fields:
         if field not in data or not data[field]:
             return jsonify({"error": f"{field} is required"}), 400
 
     # Get fair price for the commodity
-    fair_price_data = fetch_fair_price(data["product_name"])
+    product_name= text_to_text_translation(data['product_name'])
+    commodity = text_to_text_translation(data['commodity'])
+    units = text_to_text_translation(data['units'])
+    print("Product Name : ",product_name)
+    
+    fair_price_data = fetch_fair_price(product_name)
     print(fair_price_data)
     if not fair_price_data:
         return jsonify({"error": "Failed to fetch fair price for the commodity"}), 500
@@ -26,16 +34,17 @@ def upload_product():
         return jsonify({"error": f"Price must be between ₹{min_price} and ₹{max_price}"}), 400
 
     # Upload image to Supabase storage
-    # image_url = upload_image_to_supabase(data["image"])
+    image_url = data["image"]
 
     # Insert product into database
     product_data = {
         "farmer_id": data["farmer_id"],
-        "product_name": data["product_name"],
-        "commodity": data["commodity"],
+        "product_name": product_name,
+        "commodity": commodity,
         "price": price,
         "quantity": int(data["quantity"]),
-        # "image_url": image_url,
+        "image_url": image_url,
+        "units":units,
         "status": "available"
     }
     try:
@@ -47,24 +56,66 @@ def upload_product():
 
 @product_bp.route('/all', methods=['GET'])
 def get_all_products():
-    response = (
-        supabase
-        .table("products")
-        .select("*, users(name)")  # Join farmers and fetch farmer's name
-        .eq("status", "available")
-        .order("uploaded_at", desc=True)
-        .execute()
-    )
+    # 1. Get the search terms from query parameters
+    # Use distinct names to avoid confusion
+    product_name_filter = request.args.get('product_name', None)
+    commodity_filter = request.args.get('commodity', None)
 
-    products = []
-    if response.data:
-        for item in response.data:
-            farmer_name = item.get("users", {}).get("name", "Unknown")
-            item["farmer_name"] = farmer_name
-            item.pop("farmers", None)  # Optional: remove nested 'farmers' field
-            products.append(item)
+    try:
+        # 2. Start building the query
+        query_builder = (
+            supabase
+            .table("products")
+            .select("*, users(name)")  # Join users table
+            .eq("status", "available")
+        )
 
-    return jsonify(products), 200
+        # 3. --- Apply filters conditionally ---
+        # Apply product_name filter if provided
+        if product_name_filter and product_name_filter.strip():
+            query_builder = query_builder.ilike('product_name', f'%{product_name_filter.strip()}%')
+
+        # Apply commodity filter if provided
+        if commodity_filter and commodity_filter.strip():
+             # Assuming the column name in your Supabase table is 'commodity'
+            query_builder = query_builder.ilike('commodity', f'%{commodity_filter.strip()}%')
+
+        # 4. Add ordering (apply *after* all filtering)
+        query_builder = query_builder.order("uploaded_at", desc=True)
+
+        # 5. Execute the final query
+        response = query_builder.execute()
+
+        # --- Process the results (This part remains the same) ---
+        processed_products = []
+        if response.data:
+            for item in response.data:
+                # Get farmer name
+                farmer_name = item.get("users", {}).get("name", "Unknown")
+                item["farmer_name"] = farmer_name
+                item.pop("users", None)
+
+                # Format date
+                timestamp_str = item.get("uploaded_at")
+                readable_date = "N/A"
+                if timestamp_str:
+                    try:
+                        dt_object = datetime.fromisoformat(timestamp_str)
+                        readable_date = dt_object.strftime("%B %d, %Y at %I:%M %p")
+                    except ValueError as e:
+                        print(f"Warning: Could not parse date '{timestamp_str}': {e}")
+                        readable_date = "Invalid Date"
+                item["uploaded_at_readable"] = readable_date
+
+                processed_products.append(item)
+
+        return jsonify(processed_products), 200
+
+    except Exception as e:
+        # Log the full error
+        print(f"Error fetching all products: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": "Something went wrong while fetching products"}), 500
+
 
 
 @product_bp.route('/get', methods=['GET'])
@@ -90,9 +141,165 @@ def get_product_by_id():
         farmer_name = product.get("users", {}).get("name", "Unknown")
         product["farmer_name"] = farmer_name
         product.pop("users", None)  # Clean up nested users data if needed
+        timestamp_str = product.get("uploaded_at")
+        readable_date = "N/A" # Default value if timestamp is missing or invalid
+        if timestamp_str:
+                try:
+                    # Parse the ISO 8601 timestamp string
+                    # Supabase often returns timestamps with timezone info or microseconds.
+                    # fromisoformat usually handles this well.
+                    dt_object = datetime.fromisoformat(timestamp_str)
 
+                    # Format the datetime object into a readable string
+                    # Example Format 1: "April 11, 2025 at 06:48 PM"
+                    readable_date = dt_object.strftime("%B %d, %Y at %I:%M %p")
+
+                except ValueError as e:
+                    print(f"Warning: Could not parse date '{timestamp_str}': {e}")
+                    readable_date = "Invalid Date" # Or keep "N/A" or the original string
+
+        product["uploaded_at_readable"] = readable_date
+        print(product)
         return jsonify(product), 200
 
     except Exception as e:
         print(f"Error fetching product by ID: {e}")
         return jsonify({"error": "Something went wrong"}), 500
+@product_bp.route('/getfarmer', methods=['GET'])
+def get_product_by_farmerid():
+    farmer_id = request.args.get('farmer_id')
+    if not farmer_id:
+        return jsonify({"error": "Farmer ID is required"}), 400
+
+    try:
+        response = (
+            supabase
+            .table("products")
+            .select("*, users(name)")  # Join with users table to get farmer name
+            .eq("farmer_id", farmer_id)
+            .execute()
+        )
+
+        products = response.data
+        if not products:
+            return jsonify({"error": "No products found for this farmer"}), 404
+
+        # Clean and format each product
+        for product in products:
+            farmer_name = product.get("users", {}).get("name", "Unknown")
+            product["farmer_name"] = farmer_name
+            product.pop("users", None)  # Remove nested users data if needed
+            timestamp_str = product.get("uploaded_at")
+            readable_date = "N/A" # Default value if timestamp is missing or invalid
+            if timestamp_str:
+                try:
+                    # Parse the ISO 8601 timestamp string
+                    # Supabase often returns timestamps with timezone info or microseconds.
+                    # fromisoformat usually handles this well.
+                    dt_object = datetime.fromisoformat(timestamp_str)
+
+                    # Format the datetime object into a readable string
+                    # Example Format 1: "April 11, 2025 at 06:48 PM"
+                    readable_date = dt_object.strftime("%B %d, %Y at %I:%M %p")
+
+                    # Example Format 2: "11 Apr 2025, 18:48"
+                    # readable_date = dt_object.strftime("%d %b %Y, %H:%M")
+
+                    # Example Format 3: Relative time (more complex, often better done frontend)
+                    # You would need a library like 'humanize' or calculate the difference
+                    # from datetime import timezone
+                    # time_diff = datetime.now(timezone.utc) - dt_object
+                    # readable_date = f"{humanize.naturaldelta(time_diff)} ago" # Requires 'pip install humanize'
+
+                except ValueError as e:
+                    print(f"Warning: Could not parse date '{timestamp_str}': {e}")
+                    readable_date = "Invalid Date" # Or keep "N/A" or the original string
+
+            product["uploaded_at_readable"] = readable_date
+
+        return jsonify(products), 200
+
+    except Exception as e:
+        print(f"Error fetching products by farmer ID: {e}")
+        return jsonify({"error": "Something went wrong"}), 500
+
+
+def text_to_text_translation(text):
+    url = "https://text-translator2.p.rapidapi.com/translate"
+    headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        "X-RapidAPI-Key": "0f491a5108mshbe7b62a9976bafbp15461ejsn7894515d0926",
+        "X-RapidAPI-Host": "text-translator2.p.rapidapi.com",
+    }
+    data = {
+        "source_language": "auto",
+        "target_language": "en",
+        "text": text,
+    }
+    response = requests.post(url, data=data, headers=headers)
+    translation = response.json()
+    translated_text = translation["data"]["translatedText"]
+    print(translated_text)
+    return translated_text
+
+
+
+@product_bp.route('/edit', methods=['PUT'])
+def edit_product():
+    data = request.json
+    required_fields = ["product_id", "farmer_id", "product_name", "commodity", "price", "quantity", "units"]
+    
+    # Validate required fields
+    for field in required_fields:
+        if field not in data or not data[field]:
+            return jsonify({"error": f"{field} is required"}), 400
+
+    # Translate for consistency with fair price service
+    product_name = text_to_text_translation(data['product_name'])
+    commodity = text_to_text_translation(data['commodity'])
+    units = text_to_text_translation(data['units'])
+
+    # Get fair price
+    fair_price_data = fetch_fair_price(product_name)
+    if not fair_price_data:
+        return jsonify({"error": "Failed to fetch fair price for the commodity"}), 500
+
+    min_price, max_price = fair_price_data["min_price"], fair_price_data["max_price"]
+    price = float(data["price"])
+    if price < min_price or price > max_price:
+        return jsonify({"error": f"Price must be between ₹{min_price} and ₹{max_price}"}), 400
+
+    # Prepare update payload
+    update_data = {
+        "product_name": product_name,
+        "commodity": commodity,
+        "price": price,
+        "quantity": int(data["quantity"]),
+        "units": units
+    }
+
+    if "image" in data and data["image"]:  # Optional image update
+        update_data["image_url"] = data["image"]
+
+    try:
+        response = (
+            supabase
+            .table("products")
+            .update(update_data)
+            .eq("id", data["product_id"])
+            .eq("farmer_id", data["farmer_id"])  # Ensure only the product owner can update
+            .execute()
+        )
+
+        if response.error:
+            return jsonify({"error": response.error.message}), 500
+
+        return jsonify({
+            "message": "Product updated successfully",
+            "suggested_price_range": [min_price, max_price]
+        }), 200
+
+    except Exception as e:
+        import traceback
+        print(f"Error updating product: {e}\n{traceback.format_exc()}")
+        return jsonify({"error": "Something went wrong during update"}), 500
