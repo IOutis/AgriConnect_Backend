@@ -448,6 +448,7 @@ def accept_negotiation():
     negotiation_id = data.get("negotiation_id")
     buyer_id = data.get("buyer_id")
     quantity = data.get("quantity")
+    quantity = int(quantity)
 
     if not all([negotiation_id, buyer_id, quantity]):
         return jsonify({"error": "Missing required fields"}), 400
@@ -466,20 +467,45 @@ def accept_negotiation():
     if not negotiation:
         return jsonify({"error": "Negotiation not found"}), 404
 
+    product_id = negotiation["product_id"]
+
+    # Fetch current product details
+    product_res = (
+        supabase
+        .table("products")
+        .select("quantity")
+        .eq("id", product_id)
+        .single()
+        .execute()
+    )
+
+    product = product_res.data
+    if not product:
+        return jsonify({"error": "Product not found"}), 404
+
+    current_quantity = product["quantity"]
+    current_quantity= int(current_quantity)
+
+    if quantity > current_quantity:
+        return jsonify({"error": "Not enough quantity available"}), 400
+
+    # Update product quantity
+    new_quantity = current_quantity - quantity
+    supabase.table("products").update({"quantity": new_quantity}).eq("id", product_id).execute()
+
     # Mark negotiation as accepted
     supabase.table("negotiations").update({"status": "accepted"}).eq("id", negotiation_id).execute()
 
     # Create order
     order = {
         "buyer_id": buyer_id,
-        "product_id": negotiation["product_id"],
+        "product_id": product_id,
         "quantity": quantity,
         "total_price": negotiation["suggested_price"] * quantity,
         "negotiated_price": negotiation["suggested_price"],
         "status": "confirmed"
     }
 
-    # ✅ Correct way to return the inserted row
     order_insert = (
         supabase
         .table("orders")
@@ -542,6 +568,7 @@ from datetime import datetime
 def get_negotiation_threads():
     user_id = request.args.get("user_id")
     lang= request.args.get("lang")
+    print("Lang = ",lang)
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
@@ -586,6 +613,8 @@ def get_negotiation_threads():
                     readable_date = "Invalid Date"
             if lang !="en":
                 product_name_translated = eng_to_des_translation(product.get("product_name"),lang)
+            else:
+                product_name_translated = product.get("product_name")
             threads.append({
                 "thread_id": thread_key,
                 "product_id": product_id,
