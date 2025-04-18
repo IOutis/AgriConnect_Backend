@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from utils.helpers import supabase, fetch_fair_price
 import requests
 import traceback
+
 product_bp = Blueprint('product', __name__)
 
 # Upload product with price validation
@@ -13,14 +14,15 @@ def upload_product():
     print(data)
     for field in required_fields:
         if field not in data or not data[field]:
+            print(field ,"is required")
             return jsonify({"error": f"{field} is required"}), 400
 
     # Get fair price for the commodity
-    product_name= text_to_text_translation(data['product_name'])
-    commodity = text_to_text_translation(data['commodity'])
-    units = text_to_text_translation(data['units'])
+    product_name= text_to_eng_translation(data['product_name'])
+    commodity = text_to_eng_translation(data['commodity'])
+    units = text_to_eng_translation(data['units'])
     print("Product Name : ",product_name)
-    
+    product_name = product_name.title()
     fair_price_data = fetch_fair_price(product_name)
     print(fair_price_data)
     if not fair_price_data:
@@ -60,6 +62,8 @@ def get_all_products():
     # Use distinct names to avoid confusion
     product_name_filter = request.args.get('product_name', None)
     commodity_filter = request.args.get('commodity', None)
+    lang = request.args.get('lang',"en")
+    print("LANG : ",lang)
 
     try:
         # 2. Start building the query
@@ -92,7 +96,8 @@ def get_all_products():
             for item in response.data:
                 # Get farmer name
                 farmer_name = item.get("users", {}).get("name", "Unknown")
-                item["farmer_name"] = farmer_name
+                if lang!="en":
+                    item["farmer_name"] = eng_to_des_translation(farmer_name,lang)
                 item.pop("users", None)
 
                 # Format date
@@ -106,8 +111,18 @@ def get_all_products():
                         print(f"Warning: Could not parse date '{timestamp_str}': {e}")
                         readable_date = "Invalid Date"
                 item["uploaded_at_readable"] = readable_date
+                
+                if(lang!="en"):
+                    item['product_name_translated']=eng_to_des_translation(item['product_name'],lang)
+                    item['commodity_translated']=eng_to_des_translation(item['commodity'],lang)
+                    item['units_translated']=eng_to_des_translation(item['units'],lang)
+                else :
+                    item['product_name_translated']=item['product_name']
+                    item['commodity_translated']=item['commodity']
+                    item['units_translated']=item['units']
 
                 processed_products.append(item)
+        
 
         return jsonify(processed_products), 200
 
@@ -121,6 +136,8 @@ def get_all_products():
 @product_bp.route('/get', methods=['GET'])
 def get_product_by_id():
     product_id = request.args.get('id')
+    lang = request.args.get('lang')
+
     if not product_id:
         return jsonify({"error": "Product ID is required"}), 400
 
@@ -128,38 +145,46 @@ def get_product_by_id():
         response = (
             supabase
             .table("products")
-            .select("*, users(name)")  # Join with users table to get farmer name
+            .select("*, users(name)")
             .eq("id", product_id)
-            .single()  # Ensure one row
+            .single()
             .execute()
         )
+
+        if "error" in response and response.error:
+            return jsonify({"error": response.error.message}), 500
 
         product = response.data
         if not product:
             return jsonify({"error": "Product not found"}), 404
 
+        # Extract farmer name
         farmer_name = product.get("users", {}).get("name", "Unknown")
         product["farmer_name"] = farmer_name
-        product.pop("users", None)  # Clean up nested users data if needed
+        product.pop("users", None)
+
+        # Format uploaded_at date
         timestamp_str = product.get("uploaded_at")
-        readable_date = "N/A" # Default value if timestamp is missing or invalid
+        readable_date = "N/A"
         if timestamp_str:
-                try:
-                    # Parse the ISO 8601 timestamp string
-                    # Supabase often returns timestamps with timezone info or microseconds.
-                    # fromisoformat usually handles this well.
-                    dt_object = datetime.fromisoformat(timestamp_str)
+            try:
+                dt_object = datetime.fromisoformat(timestamp_str)
+                readable_date = dt_object.strftime("%B %d, %Y at %I:%M %p")
+            except ValueError as e:
+                print(f"Warning: Could not parse date '{timestamp_str}': {e}")
+                readable_date = "Invalid Date"
 
-                    # Format the datetime object into a readable string
-                    # Example Format 1: "April 11, 2025 at 06:48 PM"
-                    readable_date = dt_object.strftime("%B %d, %Y at %I:%M %p")
-
-                except ValueError as e:
-                    print(f"Warning: Could not parse date '{timestamp_str}': {e}")
-                    readable_date = "Invalid Date" # Or keep "N/A" or the original string
-
+        # Add translations if lang is provided
+        if lang and lang != "en":
+            product['product_name_translated'] = eng_to_des_translation(product['product_name'], lang)
+            product['commodity_translated'] = eng_to_des_translation(product['commodity'], lang)
+            product['units_translated'] = eng_to_des_translation(product['units'], lang)
+        else :
+                    product['product_name_translated']=product['product_name']
+                    product['commodity_translated']=product['commodity']
+                    product['units_translated']=product['units']
         product["uploaded_at_readable"] = readable_date
-        print(product)
+
         return jsonify(product), 200
 
     except Exception as e:
@@ -168,6 +193,7 @@ def get_product_by_id():
 @product_bp.route('/getfarmer', methods=['GET'])
 def get_product_by_farmerid():
     farmer_id = request.args.get('farmer_id')
+    lang = request.args.get('lang')
     if not farmer_id:
         return jsonify({"error": "Farmer ID is required"}), 400
 
@@ -216,7 +242,14 @@ def get_product_by_farmerid():
                     readable_date = "Invalid Date" # Or keep "N/A" or the original string
 
             product["uploaded_at_readable"] = readable_date
-
+            if lang!="en": 
+                product['product_name_translated']=eng_to_des_translation(product['product_name'],lang)
+                product['commodity_translated']=eng_to_des_translation(product['commodity'],lang)
+                product['units_translated']=eng_to_des_translation(product['units'],lang)
+            else :
+                    product['product_name_translated']=product['product_name']
+                    product['commodity_translated']=product['commodity']
+                    product['units_translated']=product['units']
         return jsonify(products), 200
 
     except Exception as e:
@@ -224,7 +257,7 @@ def get_product_by_farmerid():
         return jsonify({"error": "Something went wrong"}), 500
 
 
-def text_to_text_translation(text):
+def text_to_eng_translation(text):
     url = "https://text-translator2.p.rapidapi.com/translate"
     headers = {
         "content-type": "application/x-www-form-urlencoded",
@@ -242,31 +275,57 @@ def text_to_text_translation(text):
     print(translated_text)
     return translated_text
 
-
+def eng_to_des_translation(text,desired_lang):
+    url = "https://text-translator2.p.rapidapi.com/translate"
+    headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        "X-RapidAPI-Key": "0f491a5108mshbe7b62a9976bafbp15461ejsn7894515d0926",
+        "X-RapidAPI-Host": "text-translator2.p.rapidapi.com",
+    }
+    data = {
+        "source_language": "en",
+        "target_language": desired_lang,
+        "text": text,
+    }
+    response = requests.post(url, data=data, headers=headers)
+    translation = response.json()
+    translated_text = translation["data"]["translatedText"]
+    print(translated_text)
+    return translated_text
 
 @product_bp.route('/edit', methods=['PUT'])
 def edit_product():
     data = request.json
     required_fields = ["product_id", "farmer_id", "product_name", "commodity", "price", "quantity", "units"]
-    
+    print(data)
     # Validate required fields
     for field in required_fields:
         if field not in data or not data[field]:
+            print("error")
             return jsonify({"error": f"{field} is required"}), 400
+        
 
     # Translate for consistency with fair price service
-    product_name = text_to_text_translation(data['product_name'])
-    commodity = text_to_text_translation(data['commodity'])
-    units = text_to_text_translation(data['units'])
+    product_name = text_to_eng_translation(data['product_name'])
+    commodity = text_to_eng_translation(data['commodity'])
+    units = text_to_eng_translation(data['units'])
 
     # Get fair price
     fair_price_data = fetch_fair_price(product_name)
-    if not fair_price_data:
-        return jsonify({"error": "Failed to fetch fair price for the commodity"}), 500
+
+# Check if fetch failed or returned error
+    fair_price_data = fetch_fair_price(product_name)
+
+# Check if fetch failed or returned error
+    if not fair_price_data or "min_price" not in fair_price_data or "max_price" not in fair_price_data:
+        print("Fair price data error:", fair_price_data)
+        return jsonify({"error": "Failed to fetch valid fair price for the commodity"}), 500
+
 
     min_price, max_price = fair_price_data["min_price"], fair_price_data["max_price"]
     price = float(data["price"])
     if price < min_price or price > max_price:
+        
         return jsonify({"error": f"Price must be between ₹{min_price} and ₹{max_price}"}), 400
 
     # Prepare update payload
@@ -275,7 +334,8 @@ def edit_product():
         "commodity": commodity,
         "price": price,
         "quantity": int(data["quantity"]),
-        "units": units
+        "units": units,
+        # "image": data["image"],
     }
 
     if "image" in data and data["image"]:  # Optional image update
@@ -291,8 +351,8 @@ def edit_product():
             .execute()
         )
 
-        if response.error:
-            return jsonify({"error": response.error.message}), 500
+        # if response.error:
+        #     return jsonify({"error": response.error.message}), 500
 
         return jsonify({
             "message": "Product updated successfully",

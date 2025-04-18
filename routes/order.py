@@ -1,7 +1,7 @@
 import traceback
 from flask import Blueprint, request, jsonify
 from utils.helpers import supabase
-
+from routes.product import eng_to_des_translation,text_to_eng_translation
 order_bp = Blueprint('order', __name__)
 
 # --------------------------------------
@@ -35,8 +35,11 @@ def place_order():
 @order_bp.route('/get_order_summary', methods=['GET'])
 def get_order_summary():
     buyer_id = request.args.get("buyer_id")
-    if not buyer_id:
-        return jsonify({"error": "buyer_id is required"}), 400
+    lang = request.args.get("lang")
+    print("lang = ",lang)
+    print("Buyer_id = ", buyer_id)
+    if not lang:
+        return jsonify({"error": "lang is none"}), 400
 
     # Step 1: Fetch cart items
     cart_response = supabase.table("carts").select("*").eq("buyer_id", buyer_id).execute()
@@ -65,10 +68,15 @@ def get_order_summary():
         price_per_unit = float(product["price"])
         item_total = price_per_unit * quantity
         total_price += item_total
-
+        if lang!="en":
+            product_name_translated = eng_to_des_translation(product["product_name"],lang)
+        else:
+            product_name_translated = (product["product_name"])
+            
         order_summary.append({
             # "product_id": product_id,
             "product_name": product["product_name"],
+            "product_name_translated":product_name_translated,
             "quantity": quantity,
             "price_per_unit": price_per_unit,
             "total_price": round(item_total, 2)
@@ -94,26 +102,44 @@ def confirm_order():
     if not cart_items:
         return jsonify({"error": "No items in cart to place order"}), 400
 
-    # Step 2: Get product prices
+    # Step 2: Get product details (price + quantity)
     product_ids = list({item["product_id"] for item in cart_items})
-    products_response = supabase.table("products").select("id, product_name, price").in_("id", product_ids).execute()
+    products_response = supabase.table("products").select("id, product_name, price, quantity").in_("id", product_ids).execute()
     products = {prod["id"]: prod for prod in products_response.data}
 
-    # Step 3: Build order entries
+    # Step 3: Validate stock availability
+    out_of_stock_items = []
+    for item in cart_items:
+        product_id = item["product_id"]
+        requested_qty = int(item["quantity"])
+        product = products.get(product_id)
+
+        if not product:
+            out_of_stock_items.append(f"Product ID {product_id} not found")
+        elif requested_qty > int(product["quantity"]):
+            out_of_stock_items.append(f"{product['product_name']} has only {product['quantity']} left")
+
+    if out_of_stock_items:
+        return jsonify({
+            "error": "Some items are out of stock or exceed available quantity",
+            "details": out_of_stock_items
+        }), 400
+
+    # Step 4: Build order entries and calculate totals
     total_price = 0
     order_entries = []
+    quantity_updates = []
 
     for item in cart_items:
         product_id = item["product_id"]
         quantity = int(item["quantity"])
-        product = products.get(product_id)
-
-        if not product:
-            continue  # skip if product info missing
+        product = products[product_id]
 
         price_per_unit = float(product["price"])
         item_total = price_per_unit * quantity
         total_price += item_total
+
+        new_quantity = int(product["quantity"]) - quantity
 
         order_entries.append({
             "buyer_id": buyer_id,
@@ -123,10 +149,20 @@ def confirm_order():
             "status": "pending"
         })
 
-    # Step 4: Insert orders
+        quantity_updates.append({
+            "id": product_id,
+            "quantity": new_quantity
+        })
+        print("New Quantity = ",new_quantity)
+
+    # Step 5: Insert orders
     supabase.table("orders").insert(order_entries).execute()
 
-    # Step 5: Clear cart
+    # Step 6: Update product stock
+    for update in quantity_updates:
+        supabase.table("products").update({"quantity": update["quantity"]}).eq("id", update["id"]).execute()
+
+    # Step 7: Clear cart
     supabase.table("carts").delete().eq("buyer_id", buyer_id).execute()
 
     return jsonify({
@@ -143,6 +179,7 @@ def confirm_order():
 @order_bp.route('/my_orders', methods=['GET'])
 def get_orders_for_buyer():
     buyer_id = request.args.get('buyer_id')
+    lang = request.args.get('lang')
     print(buyer_id)
     if not buyer_id:
         print("BUYER ERROR",buyer_id)
@@ -170,6 +207,10 @@ def get_orders_for_buyer():
     for order in orders:
         product_info = product_info_map.get(order["product_id"], {"product_name": "Unknown", "image_url": ""})
         order["product_name"] = product_info["product_name"]
+        if lang!="en":
+            order["product_name_translated"] = eng_to_des_translation(product_info["product_name"],lang)
+        else:
+            order["product_name_translated"] = product_info["product_name"]
         order["image_url"] = product_info["image_url"]
         enriched_orders.append(order)
     print(enriched_orders)
@@ -182,6 +223,7 @@ def get_orders_for_buyer():
 @order_bp.route('/farmer_orders', methods=['GET'])
 def get_orders_for_farmer():
     farmer_id = request.args.get('farmer_id')
+    lang = request.args.get('lang')
     if not farmer_id:
         return jsonify({"error": "farmer_id query parameter is required"}), 400
 
@@ -195,21 +237,44 @@ def get_orders_for_farmer():
     # Step 2: Get orders for those products
     order_response = supabase.table("orders").select("*").in_("product_id", product_ids).execute()
     orders = order_response.data if order_response.data else []
+    for order in orders:
+        if(lang!="en"):
+            order["product_name_translated"] = eng_to_des_translation(order["product_name"],lang)
+        else:
+            order["product_name_translated"] = order["product_name"]
 
     return jsonify(orders), 200
 @order_bp.route('/product_orders', methods=['GET'])
 def get_orders_for_product():
     product_id = request.args.get('product_id')
+    lang = request.args.get('lang')
     if not product_id:
         return jsonify({"error": "product_id query parameter is required"}), 400
 
     try:
-        order_response = supabase.table("orders").select("*").in_("product_id", [product_id]).execute()
+        # Include buyer_name via join
+        order_response = supabase.table("orders")\
+            .select("*, users(name)")\
+            .in_("product_id", [product_id])\
+            .execute()
+
         orders = order_response.data if order_response.data else []
+
+        # Rename 'users.name' to 'buyer_name' for clarity
+        for order in orders:
+            if "users" in order and "name" in order["users"]:
+                if lang!="en":
+                    order["buyer_name_translated"] = eng_to_des_translation(order["users"]["name"],lang)
+                else:
+                    order["buyer_name_translated"] = order["users"]["name"]
+            order.pop("users", None)  # Remove nested users object if not needed
+
         return jsonify(orders), 200
+
     except Exception as e:
         print(f"Error fetching product orders: {e}")
         return jsonify({"error": "Something went wrong"}), 500
+
 
 # --------------------------------------
 # Add item to cart
@@ -240,6 +305,8 @@ def add_to_cart():
 @order_bp.route('/cart', methods=['GET'])
 def get_cart():
     buyer_id = request.args.get('buyer_id')
+    lang = request.args.get('lang')
+    print("Lang = ",lang)
     if not buyer_id:
         return jsonify({"error": "buyer_id query parameter is required"}), 400
 
@@ -248,14 +315,19 @@ def get_cart():
 
     # if response.error:
     #     return jsonify({"error": response.error.message}), 500
-
+    print(response.data)
     cart_items = []
     for item in response.data:
         product = item.get("product_id", {})
+        if lang!="en":
+            product_name_translated = eng_to_des_translation(item.get("product_name"),lang)
+        else:
+            product_name_translated = item.get("product_name")
         cart_items.append({
             "cart_id": item["id"],
             "product_id": product.get("id"),
             "product_name": product.get("product_name"),
+            "product_name_translated": product_name_translated,
             "commodity": product.get("commodity"),
             "price": product.get("price"),
             "quantity": item["quantity"]
@@ -284,7 +356,9 @@ def remove_from_cart():
 def get_negotiation_details():
     product_id = request.args.get("product_id")
     buyer_id = request.args.get("buyer_id")
-
+    current_user_id = request.args.get("current_user_id")  # or however you handle user auth
+    lang= request.args.get("lang")
+    print(current_user_id)
     if not product_id or not buyer_id:
         return jsonify({"error": "product_id and buyer_id are required"}), 400
 
@@ -295,6 +369,21 @@ def get_negotiation_details():
     if not product:
         return jsonify({"error": "Product not found"}), 404
 
+    # Fetch unread negotiations where the current user is the receiver
+    negotiations_res = (
+        supabase.table("negotiations")
+        .select("id")
+        .eq("product_id", product_id)
+        .eq("receiver_id", current_user_id)
+        .eq("read", False)
+        .execute()
+    )
+    unread_negotiation_ids = [row["id"] for row in negotiations_res.data]
+
+    # If there are unread negotiations, mark them as read
+    if unread_negotiation_ids:
+        supabase.table("negotiations").update({"read": True}).in_("id", unread_negotiation_ids).execute()
+
     # Fetch farmer
     farmer_id = product.get("farmer_id")
     farmer_res = supabase.table("users").select("id, name, phone_number").eq("id", farmer_id).single().execute()
@@ -303,13 +392,21 @@ def get_negotiation_details():
     # Fetch consumer
     consumer_res = supabase.table("users").select("id, name, phone_number").eq("id", buyer_id).single().execute()
     consumer = consumer_res.data
-
+    if lang!="en":
+        product["product_name_translated"]= eng_to_des_translation(product["product_name"],lang)
+        farmer["name_translated"]= eng_to_des_translation(farmer["name"],lang)
+        consumer["name_translated"]= eng_to_des_translation(consumer["name"],lang)
+    else:
+        product["product_name_translated"]= product["product_name"]
+        farmer["name_translated"]= farmer["name"]
+        consumer["name_translated"]= consumer["name"]
     return jsonify({
+        
         "product_details": product,
         "farmer_details": farmer,
         "user_details": consumer
     }), 200
-    
+
 
 @order_bp.route('/negotiation/send', methods=['POST'])
 def send_negotiation_message():
@@ -320,7 +417,9 @@ def send_negotiation_message():
     suggested_price = data.get("suggested_price")
     justification = data.get("justification")
     quantity = data.get("quantity")
-
+    lang = data.get("lang")
+    if lang!="en":
+        justification= text_to_eng_translation(justification)
     if not all([product_id, sender_id, receiver_id, suggested_price, justification, quantity]):
         return jsonify({"error": "All fields are required"}), 400
 
@@ -408,30 +507,41 @@ def accept_negotiation():
 def get_negotiation_messages():
     product_id = request.args.get("product_id")
     user_id = request.args.get("user_id")
-    other_user_id = request.args.get("other_user_id")
+    farmer_id = request.args.get("farmer_id")
+    lang= request.args.get("lang")
 
-    if not product_id:
-        return jsonify({"error": "product_id is required"}), 400
+    if not product_id or not user_id or not farmer_id:
+        return jsonify({"error": "product_id, user_id, and farmer_id are required"}), 400
 
-    # Build filter dynamically
-    filters = f"product_id.eq.{product_id}"
-    if user_id and other_user_id:
-        filters += f",or=(and(sender_id.eq.{user_id},receiver_id.eq.{other_user_id}),and(sender_id.eq.{other_user_id},receiver_id.eq.{user_id}))"
+    try:
+        response = (
+            supabase
+            .table("negotiations")
+            .select("*")
+            .eq("product_id", product_id)
+            .or_(
+                f"and(sender_id.eq.{user_id},receiver_id.eq.{farmer_id}),"
+                f"and(sender_id.eq.{farmer_id},receiver_id.eq.{user_id})"
+            )
+            .order("timestamp", desc=True)
+            .execute()
+        )
+        print("Response = ",response)
+        if(lang!="en"):
+            for row in response.data:
+                row['justification'] = eng_to_des_translation(row['justification'], lang)
+        return jsonify(response.data), 200
 
-    response = supabase.table("negotiations") \
-        .select("*") \
-        .match({"product_id": product_id}) \
-        .order("timestamp", desc=False) \
-        .execute()
-
-    return jsonify(response.data), 200
-
+    except Exception as e:
+        print("Error fetching negotiation messages:", e)
+        return jsonify({"error": "Something went wrong"}), 500
 
 from datetime import datetime
 
 @order_bp.route('/negotiation/threads', methods=['GET'])
 def get_negotiation_threads():
     user_id = request.args.get("user_id")
+    lang= request.args.get("lang")
     if not user_id:
         return jsonify({"error": "user_id is required"}), 400
 
@@ -474,11 +584,13 @@ def get_negotiation_threads():
                 except ValueError as e:
                     print(f"Warning: Could not parse date '{timestamp_str}': {e}")
                     readable_date = "Invalid Date"
-
+            if lang !="en":
+                product_name_translated = eng_to_des_translation(product.get("product_name"),lang)
             threads.append({
                 "thread_id": thread_key,
                 "product_id": product_id,
                 "product_name": product.get("product_name", ""),
+                "product_name_translated":product_name_translated,
                 "product_image": product.get("image_url", ""),
                 "other_user_id": other_user_id,
                 "other_user_name": user.get("name", "Unknown"),

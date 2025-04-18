@@ -38,8 +38,8 @@ def generate_jwt(user_id, role):
 
 def fetch_fair_price(
     commodity, 
-    state="Telangana", 
-    district="Hyderabad",
+    # state="Telangana", 
+    # district="Hyderabad",
     from_date_str="04-01-2025", 
     to_date_str="04-05-2025", 
     max_data_points=30
@@ -53,8 +53,8 @@ def fetch_fair_price(
     params = {
         "api-key": API_KEY,
         "format": "json",
-        "filters[State.keyword]": state,
-        "filters[District.keyword]": district,
+        # "filters[State.keyword]": state,
+        # "filters[District.keyword]": district,
         "filters[Commodity.keyword]": commodity,
         "sort[Arrival_Date]": "desc",
         "limit": 10,
@@ -71,19 +71,16 @@ def fetch_fair_price(
             raise Exception(f"Failed to fetch data. Status code: {response.status_code}")
         
         data = response.json()
+        print(data)
         records = data.get("records", [])
         if not records:
             print("records not found")
             break
         
         for record in records:
-            arrival_date_str = record.get("Arrival_Date")
-            if arrival_date_str:
-                arrival_date = datetime.datetime.strptime(arrival_date_str, "%d/%m/%Y")
-                if from_date <= arrival_date <= to_date:
-                    price = record.get("Modal_Price")
-                    if price:
-                        modal_prices.append(int(price))
+            price = record.get("Modal_Price")
+            if price:
+                modal_prices.append(int(price))
             if len(modal_prices) >= max_data_points:
                 break
         
@@ -130,4 +127,4 @@ def translate_message(message, target_lang="en"):
         return message
 
 if __name__=="__main__":
-    print(fetch_fair_price("Tomato"))
+    print(fetch_fair_price("Banana"))

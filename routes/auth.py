@@ -4,7 +4,7 @@ import datetime
 from flask import Blueprint, request, jsonify
 from werkzeug.security import generate_password_hash, check_password_hash
 from utils.helpers import supabase  # Import your Supabase instance
-
+from routes.product import text_to_eng_translation
 auth_bp = Blueprint('auth', __name__)
 
 # Load Secret Key from Environment Variables (Ensure this is set)
@@ -24,7 +24,7 @@ def generate_jwt(user_id, role):
 @auth_bp.route('/signup', methods=['POST'])
 def signup():
     data = request.json
-    required_fields = ["name", "email", "password", "role", "phone_number"]
+    required_fields = ["name", "email", "password", "role", "phone_number","lang"]
 
     # Validate required fields
     missing_fields = [field for field in required_fields if not data.get(field)]
@@ -33,7 +33,9 @@ def signup():
 
     # Hash password before storing
     hashed_password = generate_password_hash(data["password"])
-
+    if(data['lang']!="en"):
+        data['name']= text_to_eng_translation(data['name'])
+        data['role']= text_to_eng_translation(data['role']).lower()
     # Create user record
     user_data = {
         "name": data["name"],

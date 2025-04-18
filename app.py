@@ -27,7 +27,7 @@ app.register_blueprint(chat_bp, url_prefix='/api/chat')
 
 # Instead of app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard'),
 # we use just '/api' so that the routes become /api/farmer/<id> and /api/buyer/<id>
-app.register_blueprint(dashboard_bp, url_prefix='/api')
+app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
 
 # Test endpoint
 @app.route('/')
