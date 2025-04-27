@@ -23,8 +23,9 @@ def upload_product():
         product_name= text_to_eng_translation(data['product_name'])
         commodity = text_to_eng_translation(data['commodity'])
         units = text_to_eng_translation(data['units'])
+    else :
+        product_name = product_name.title()
     print("Product Name : ",product_name)
-    product_name = product_name.title()
     fair_price_data = fetch_fair_price(product_name)
     print(fair_price_data)
     if not fair_price_data:
