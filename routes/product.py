@@ -10,7 +10,7 @@ product_bp = Blueprint('product', __name__)
 @product_bp.route('/upload', methods=['POST'])
 def upload_product():
     data = request.json
-    required_fields = ["farmer_id", "product_name", "commodity", "price", "quantity","image" ] #"image"
+    required_fields = ["farmer_id", "product_name", "commodity", "price", "quantity","image" ,"lang"] #"image"
     print(data)
     for field in required_fields:
         if field not in data or not data[field]:
@@ -18,9 +18,11 @@ def upload_product():
             return jsonify({"error": f"{field} is required"}), 400
 
     # Get fair price for the commodity
-    product_name= text_to_eng_translation(data['product_name'])
-    commodity = text_to_eng_translation(data['commodity'])
-    units = text_to_eng_translation(data['units'])
+    lang = data["lang"]
+    if (lang!="en"): 
+        product_name= text_to_eng_translation(data['product_name'])
+        commodity = text_to_eng_translation(data['commodity'])
+        units = text_to_eng_translation(data['units'])
     print("Product Name : ",product_name)
     product_name = product_name.title()
     fair_price_data = fetch_fair_price(product_name)
