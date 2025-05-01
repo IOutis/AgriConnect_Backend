@@ -36,37 +36,42 @@ def generate_jwt(user_id, role):
 #         raise Exception(res.error.message)
 #     return f"{SUPABASE_URL}/storage/v1/object/public/{image_name}"
 
+import requests
+import datetime
+from urllib.parse import quote
+
+import requests
+import datetime
+from urllib.parse import quote
+
 def fetch_fair_price(
     commodity, 
-    # state="Telangana", 
-    # district="Hyderabad",
-    from_date_str="04-01-2025", 
-    to_date_str="04-05-2025", 
     max_data_points=30
 ):
-    API_KEY = "579b464db66ec23bdd0000016d33473f8d42499f462ccd0111ad5373"
+    API_KEY = "579b464db66ec23bdd000001cdd3946e44ce4aad7209ff7b23ac571b"
     API_URL = "https://api.data.gov.in/resource/35985678-0d79-46b4-9ed6-6f13308a1d24"
     
-    from_date = datetime.datetime.strptime(from_date_str, "%d-%m-%Y")
-    to_date = datetime.datetime.strptime(to_date_str, "%d-%m-%Y")
-
+    # Remove the date-related logic
     params = {
         "api-key": API_KEY,
         "format": "json",
-        # "filters[State.keyword]": state,
-        # "filters[District.keyword]": district,
-        "filters[Commodity.keyword]": commodity,
-        "sort[Arrival_Date]": "desc",
+        "filters[Commodity]": commodity,
         "limit": 10,
-        "offset": 0
+        "offset": 0,
+        "sort[Arrival_Date]":"desc"
     }
+
+    # Manually encoding the "sort[Arrival_Date]" key
+    # params[quote("sort[Arrival_Date]")] = "desc"
+    
+    # Print the URL being sent for debugging
+    print("Request URL:", API_URL, "?", "&".join([f"{key}={value}" for key, value in params.items()]))
     
     modal_prices = []
     offset = 0
     while len(modal_prices) < max_data_points:
         params["offset"] = offset
         response = requests.get(API_URL, params=params)
-        # print("→", response.url)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch data. Status code: {response.status_code}")
         
@@ -89,7 +94,6 @@ def fetch_fair_price(
         offset += params["limit"]
     
     if not modal_prices:
-        # print("MODAL = ", modal_prices)
         return None
 
     avg_modal_price = sum(modal_prices) / len(modal_prices)
@@ -97,8 +101,8 @@ def fetch_fair_price(
 
     return {
         "commodity": commodity,
-        "max_price":round(max(modal_prices)/100),
-        "min_price":round(min(modal_prices)/100),
+        "max_price": round(max(modal_prices) / 100),
+        "min_price": round(min(modal_prices) / 100),
         "average_modal_price": round(avg_modal_price, 2),
         "suggested_fair_price": round(fair_price, 2),
         "data_points": len(modal_prices)
@@ -127,4 +131,4 @@ def translate_message(message, target_lang="en"):
         return message
 
 if __name__=="__main__":
-    print(fetch_fair_price("Banana"))
+    print(fetch_fair_price("Capsicum"))
